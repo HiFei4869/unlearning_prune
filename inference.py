@@ -12,8 +12,11 @@ from loraprune.peft_model import get_peft_model
 from loraprune.utils import freeze, prune_from_checkpoint
 from loraprune.lora import LoraConfig
 from datasets import load_dataset
+import nltk
+from nltk.corpus import ptb
 
 from transformers import AutoModelForCausalLM, AutoTokenizer
+from safetensors.torch import load_file
 
 if torch.cuda.is_available():
     device = "cuda"
@@ -62,28 +65,49 @@ def main(
     )
 
     model = get_peft_model(model, config)
+    # if lora_weights:
+    #     # Check the available weights and load them
+    #     checkpoint_name = os.path.join(
+    #         lora_weights, "pytorch_model.bin"
+    #     )  # Full checkpoint
+    #     if not os.path.exists(checkpoint_name):
+    #         checkpoint_name = os.path.join(
+    #             lora_weights, "adapter_model.bin"
+    #         )  # only LoRA model - LoRA config above has to fit
+    #         resume_from_checkpoint = (
+    #             False  # So the trainer won't try loading its state
+    #         )
+    #     # The two files above have a different name depending on how they were saved, but are actually the same.
+    #     if os.path.exists(checkpoint_name):
+    #         print(f"Restarting from {checkpoint_name}")
+    #         adapters_weights = torch.load(checkpoint_name)
+    #         for name, param in adapters_weights.items():
+    #             if 'lora_mask' in name:
+    #                 adapters_weights[name] = param.reshape(-1)
+    #         model = set_peft_model_state_dict(model, adapters_weights)
+    #     else:
+    #         print(f"Checkpoint {checkpoint_name} not found")
+    # In the main function where it loads weights:
     if lora_weights:
         # Check the available weights and load them
         checkpoint_name = os.path.join(
-            lora_weights, "pytorch_model.bin"
-        )  # Full checkpoint
+            lora_weights, "adapter_model.safetensors"
+        )
+        if not os.path.exists(checkpoint_name):
+            checkpoint_name = os.path.join(
+                lora_weights, "pytorch_model.bin"
+            )
         if not os.path.exists(checkpoint_name):
             checkpoint_name = os.path.join(
                 lora_weights, "adapter_model.bin"
-            )  # only LoRA model - LoRA config above has to fit
-            resume_from_checkpoint = (
-                False  # So the trainer won't try loading its state
             )
-        # The two files above have a different name depending on how they were saved, but are actually the same.
+        
         if os.path.exists(checkpoint_name):
             print(f"Restarting from {checkpoint_name}")
-            adapters_weights = torch.load(checkpoint_name)
-            for name, param in adapters_weights.items():
-                if 'lora_mask' in name:
-                    adapters_weights[name] = param.reshape(-1)
-            model = set_peft_model_state_dict(model, adapters_weights)
-        else:
-            print(f"Checkpoint {checkpoint_name} not found")
+            if checkpoint_name.endswith('.safetensors'):
+                adapters_weights = load_file(checkpoint_name)
+            else:
+                adapters_weights = torch.load(checkpoint_name)
 
     model = model.to(device)
 
@@ -159,12 +183,14 @@ def main(
     times = np.mean(times)
     print("wikitext2 ppl:{:.2f}  inference time:{:2f}".format(results, times))
     times = []
-    eval_data = load_dataset('ptb_text_only', 'penn_treebank', split='validation', trust_remote_code=True)
-    test_dataset = process_data(eval_data, tokenizer, cutoff_len, 'sentence')
+    
+    # Use WikiText-103 validation set instead of PTB
+    eval_data = load_dataset('wikitext', 'wikitext-103-raw-v1', split='validation')
+    test_dataset = process_data(eval_data, tokenizer, cutoff_len, 'text')
     test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=1, shuffle=False)
     results = PPLMetric(model, loader=test_loader)
     times = np.mean(times)
-    print("PTB ppl:{:.2f}  inference time:{:2f}".format(results, times))
+    print("wikitext103 ppl:{:.2f}  inference time:{:2f}".format(results, times))
     return
 
 

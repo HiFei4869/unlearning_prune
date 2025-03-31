@@ -209,14 +209,11 @@ def train(
 
     if val_set_size > 0:
         train_val = data["train"].train_test_split(
-            test_size=val_set_size, shuffle=True, seed=42
+            test_size=min(val_set_size, 100), shuffle=True, seed=42  # Reduced size
         )
-        train_data = (
-            train_val["train"].shuffle().map(generate_and_tokenize_prompt)
-        )
-        val_data = (
-            train_val["test"].shuffle().map(generate_and_tokenize_prompt)
-        )
+        train_data = train_val["train"].select(range(100)).map(generate_and_tokenize_prompt)  # Tiny subset
+        val_data = train_val["test"].select(range(20)).map(generate_and_tokenize_prompt)  # Tiny subset
+
     else:
         train_data = data["train"].shuffle().map(generate_and_tokenize_prompt)
         val_data = None

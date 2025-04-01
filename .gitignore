@@ -49,4 +49,5 @@ coverage.xml
 .Spotlight-V100
 .Trashes
 ehthumbs.db
-Thumbs.db
+Thumbs.dboutputs_dir/
+outputs_dir_llama3/

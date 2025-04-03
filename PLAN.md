@@ -10,65 +10,70 @@ This document outlines the necessary modifications to adapt LoRAPrune for unlear
   def train(
       forget_dataset: str = "",  # Dataset to unlearn
       retain_dataset: str = "",  # Dataset to retain
+      forget_subset: str = None,  # Optional subset identifier
+      retain_subset: str = None,  # Optional subset identifier
       ...
   )
   ```
 - Add data loading logic for both datasets
+- Support partial dataset loading:
+  ```python
+  def load_dataset_split(dataset_path: str, subset: str = None):
+      """
+      Load full dataset or specific subset:
+      Example: 
+      - Full: load_dataset("locuslab/TOFU")
+      - Partial: load_dataset("locuslab/TOFU", "forget01")
+      """
+      if subset:
+          return load_dataset(dataset_path, subset)
+      return load_dataset(dataset_path)
+  ```
 - Create separate DataLoaders with appropriate batch sizes
 - Implement dataset validation to ensure no overlap
 
 ## 2. Importance Score Computation
 ### File: `/root/autodl-tmp/loraprune/loraprune/utils.py`
 
-#### 2.1 Sensitivity Computation
-Modify `compute_sensitivity()`:
-```python
-def compute_sensitivity(
-    layer, 
-    is_attn, 
-    dataset_type,  # 'forget' or 'retain'
-    prune_metric='lora', 
-    epsilon=1e-6
-):
-```
 
-#### 2.2 New Dual Sensitivity Function
+
+#### 2.1 New Dual Sensitivity Function
 ```python
 def compute_dual_sensitivity(
     layer,
-    forget_grad,
-    retain_grad,
+    forget_sensitivity,
+    retain_sensitivity,
     epsilon=1e-6
 ):
     """
-    Compute unlearning importance score:
-    S = I_{ij}^{forget}/(I_{ij}^{retain} + epsilon)
+    1. Calculate unlearning importance score:
+       S = s_{ij}^{forget}/(s_{ij}^{retain} + epsilon)
+    2. Return the computed score
     """
 ```
 
-#### 2.3 Update Sensitivity Dictionary
-Modify `update_sensitivity_dict()`:
-- Track both forget and retain sensitivities
-- Implement score computation
-- Add threshold-based decisions
 
-## 3. Pruning Logic Modifications
+## 3. Training Loop Modifications
+### File: `/root/autodl-tmp/loraprune/loraprune/trainer.py`
+
+#### 3.1 Trainer Class Updates
+Modify `LoRAPruneTrainer`:
+
+
+## 4. Pruning Logic Modifications
 ### File: `/root/autodl-tmp/loraprune/loraprune/utils.py`
 
-#### 3.1 Local Pruning Updates
-Modify `local_prune()`:
-- Use unlearning scores for pruning decisions
+#### 4.1 Local Pruning Updates
+Create new function `unlearning_prune()`:
+- Use unlearning importance score for pruning decisions
 - Implement threshold-based pruning
-- Add early stopping based on forget set performance
 
-#### 3.2 New Unlearning Pruning Function
 ```python
 def unlearning_prune(
     model,
-    forget_dict,
-    retain_dict,
-    threshold,
-    min_retain_performance
+    dual_sensitivity_dict, # function compute_dual_sensitivity  
+    ratio,
+    unlearning_threshold
 ):
     """
     Prune weights based on unlearning scores while
@@ -76,24 +81,6 @@ def unlearning_prune(
     """
 ```
 
-## 4. Training Loop Modifications
-### File: `/root/autodl-tmp/loraprune/loraprune/trainer.py`
-
-#### 4.1 Trainer Class Updates
-Modify `LoRAPruneTrainer`:
-- Add dual dataset evaluation support
-- Implement forget/retain loss computation
-- Add unlearning metrics tracking
-- Implement validation on both datasets
-
-#### 4.2 New Methods
-```python
-def compute_unlearning_metrics(self):
-    """Track unlearning progress and performance trade-offs"""
-
-def evaluate_forget_retain(self):
-    """Evaluate model on both datasets"""
-```
 
 ## 5. Configuration Updates
 ### File: `/root/autodl-tmp/loraprune/loraprune/lora.py`
@@ -120,12 +107,26 @@ class LoraConfig(PeftConfig):
 
 ## Implementation Priority
 1. Dataset handling modifications
-2. Dual sensitivity computation
-3. Unlearning score calculation
-4. Pruning logic updates
-5. Training loop modifications
+2. Separate gradient computation implementation
+3. Dual sensitivity computation
+4. Training loop modifications for separate gradient tracking
+5. Pruning logic updates
 6. Configuration updates
 7. Evaluation modifications
+
+## File Organization
+All modifications for unlearning functionality should be stored in new files with '_ul' suffix:
+- `prune.py` → `prune_ul.py`
+- `utils.py` → `utils_ul.py`
+- `trainer.py` → `trainer_ul.py`
+- `lora.py` → `lora_ul.py`
+- `inference.py` → `inference_ul.py`
+
+This separation ensures:
+- Clean distinction between original and unlearning implementations
+- Easy maintenance and rollback if needed
+- Clear tracking of unlearning-specific changes
+- Ability to use either version based on needs
 
 ## Notes
 - Maintain compatibility with existing LoRAPrune functionality
@@ -134,3 +135,11 @@ class LoraConfig(PeftConfig):
 - Preserve group-wise pruning structure
 - Consider adding safeguards against catastrophic forgetting
 - Add documentation for unlearning-specific parameters and usage
+- Document all dependencies between components explicitly
+- Changes to one component must cascade appropriately to all dependent components
+- **Important Implementation Notes**:
+  - Always clear gradients between forget and retain computations
+  - Use separate optimizers for importance computation and training
+  - Consider gradient accumulation for larger batch sizes
+  - Monitor memory usage when storing separate gradients
+  - Implement gradient checkpointing if memory becomes a constraint

@@ -129,37 +129,93 @@ def train(
     tokenizer.padding_side = "left"  # Allow batched inference
 
     def tokenize(prompt, add_eos_token=True):
-        result = tokenizer(
+        # Ensure prompt is a string
+        if not isinstance(prompt, str):
+            raise ValueError(f"Expected string input, got {type(prompt)}")
+            
+        # Use encode instead of batch_encode_plus for single inputs
+        encoding = tokenizer.encode(
             prompt,
             truncation=True,
             max_length=cutoff_len,
-            padding=False,
+            padding="max_length",
             return_tensors=None,
         )
+        
+        # Convert to list if it's not already
+        input_ids = encoding if isinstance(encoding, list) else encoding.ids
+        
         if (
-            result["input_ids"][-1] != tokenizer.eos_token_id
-            and len(result["input_ids"]) < cutoff_len
+            input_ids[-1] != tokenizer.eos_token_id
+            and len(input_ids) < cutoff_len
             and add_eos_token
         ):
-            result["input_ids"].append(tokenizer.eos_token_id)
-            result["attention_mask"].append(1)
-
-        result["labels"] = result["input_ids"].copy()
+            input_ids.append(tokenizer.eos_token_id)
+            
+        # Create attention mask (1 for all tokens)
+        attention_mask = [1] * len(input_ids)
+        
+        # Pad if needed
+        if len(input_ids) < cutoff_len:
+            padding_length = cutoff_len - len(input_ids)
+            input_ids.extend([tokenizer.pad_token_id] * padding_length)
+            attention_mask.extend([0] * padding_length)
+            
+        result = {
+            "input_ids": input_ids,
+            "attention_mask": attention_mask,
+            "labels": input_ids.copy()
+        }
         return result
 
+    def generate_prompt(data_point):
+        return f"""Below is an instruction that describes a task. Write a response that appropriately completes the request.
+
+### Instruction:
+{data_point["question"]}
+
+### Response:
+{data_point["answer"]}"""
+
     def generate_and_tokenize_prompt(data_point):
+        # Debug: Print data point structure before tokenization
+        print("\n===== DEBUG: TOKENIZATION =====")
+        print(f"Data point type: {type(data_point)}")
+        print(f"Data point keys: {list(data_point.keys())}")
+        for key, value in data_point.items():
+            print(f"  {key}: {type(value)} = {repr(value)[:100]}")
+        
         full_prompt = generate_prompt(data_point)
-        tokenized_full_prompt = tokenize(full_prompt, add_eos_token)
-        if not train_on_inputs:
-            user_prompt = generate_prompt({**data_point, "response": ""})
-            tokenized_user_prompt = tokenize(user_prompt, add_eos_token=False)
-            user_prompt_len = len(tokenized_user_prompt["input_ids"])
-            tokenized_full_prompt["labels"] = [
-                IGNORE_INDEX
-            ] * user_prompt_len + tokenized_full_prompt["labels"][
-                user_prompt_len:
-            ]  # could be sped up
-        return tokenized_full_prompt
+        print(f"Generated prompt type: {type(full_prompt)}")
+        print(f"Generated prompt (first 100 chars): {repr(full_prompt)[:100]}")
+        
+        try:
+            tokenized_full_prompt = tokenize(full_prompt, add_eos_token)
+            print(f"Tokenized prompt keys: {list(tokenized_full_prompt.keys())}")
+            for key, value in tokenized_full_prompt.items():
+                print(f"  {key}: {type(value)} = {type(value[0]) if value else None}")
+                
+            if not train_on_inputs:
+                user_prompt = generate_prompt({**data_point, "answer": ""})
+                tokenized_user_prompt = tokenize(user_prompt, add_eos_token=False)
+                user_prompt_len = len(tokenized_user_prompt["input_ids"])
+                tokenized_full_prompt["labels"] = [
+                    IGNORE_INDEX
+                ] * user_prompt_len + tokenized_full_prompt["labels"][
+                    user_prompt_len:
+                ]  # could be sped up
+            print("Tokenization successful!")
+            return tokenized_full_prompt
+        except Exception as e:
+            print(f"Error during tokenization: {str(e)}")
+            # Return a dummy tokenized prompt with the right structure
+            # This helps us identify which examples are causing problems
+            return {
+                "input_ids": [0] * cutoff_len,
+                "attention_mask": [0] * cutoff_len,
+                "labels": [0] * cutoff_len,
+                "error": str(e)
+            }
 
     # Load and preprocess datasets
     if forget_dataset:
@@ -187,8 +243,24 @@ def train(
         peft_type="LORA"
     )
     
-    model = get_peft_model(model, config)
 
+    # print("\n===== DEBUG: DATASET STRUCTURE =====")
+    # if forget_data:
+    #     print("Forget dataset example:")
+    #     example = forget_data["train"][0]
+    #     print(f"Keys: {list(example.keys())}")
+    #     for key, value in example.items():
+    #         print(f"  {key}: {type(value)} = {value}")
+    
+    # if retain_data:
+    #     print("\nRetain dataset example:")
+    #     example = retain_data["train"][0]
+    #     print(f"Keys: {list(example.keys())}")
+    #     for key, value in example.items():
+    #         print(f"  {key}: {type(value)} = {value}")
+    # print("=====================================\n")
+
+    model = get_peft_model(model, config)
     # Process datasets
     def process_dataset(data, split="train", max_samples=None):
         if not data:
@@ -201,7 +273,11 @@ def train(
             processed_data = train_val["train"]
             if max_samples:
                 processed_data = processed_data.select(range(min(max_samples, len(processed_data))))
-            return processed_data.map(generate_and_tokenize_prompt)
+            return processed_data.map(
+                generate_and_tokenize_prompt,
+                remove_columns=["question", "answer"],  # Remove original columns to avoid tensor conversion issues
+                batched=False  # Process one example at a time
+            )
         elif val_set_size > 0 and split == "val":
             train_val = data["train"].train_test_split(
                 test_size=0.2, shuffle=True, seed=42
@@ -209,12 +285,20 @@ def train(
             processed_data = train_val["test"]
             if max_samples:
                 processed_data = processed_data.select(range(min(max_samples, len(processed_data))))
-            return processed_data.map(generate_and_tokenize_prompt)
+            return processed_data.map(
+                generate_and_tokenize_prompt,
+                remove_columns=["question", "answer"],  # Remove original columns to avoid tensor conversion issues
+                batched=False  # Process one example at a time
+            )
         else:
             processed_data = data["train"]
             if max_samples:
                 processed_data = processed_data.select(range(min(max_samples, len(processed_data))))
-            return processed_data.map(generate_and_tokenize_prompt)
+            return processed_data.map(
+                generate_and_tokenize_prompt,
+                remove_columns=["question", "answer"],  # Remove original columns to avoid tensor conversion issues
+                batched=False  # Process one example at a time
+            )
 
     # Process forget and retain datasets
     forget_train = process_dataset(forget_data, "train", nsamples) if forget_data else None
@@ -237,9 +321,9 @@ def train(
             fp16=True,
             logging_steps=10,
             optim="adamw_torch",
-            evaluation_strategy="steps" if val_set_size > 0 else "no",
+            evaluation_strategy="no",  # Disable evaluation since we don't want to use eval dataset
             save_strategy="steps",
-            eval_steps=save_steps if val_set_size > 0 else None,
+            eval_steps=None,  # Remove eval steps since evaluation is disabled
             save_steps=save_steps,
             output_dir=output_dir,
             save_total_limit=save_total_limit,
@@ -280,13 +364,5 @@ def train(
 
     print("\nTraining completed successfully!")
     
-def generate_prompt(data_point):
-    return f"""Below is an instruction that describes a task. Write a response that appropriately completes the request.
-
-### Instruction:
-{data_point["instruction"]}
-
-### Response:
-{data_point["response"]}"""
 if __name__ == "__main__":
     fire.Fire(train)

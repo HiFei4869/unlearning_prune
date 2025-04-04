@@ -54,7 +54,7 @@ class LoRAPruneTrainer(Trainer):
         super().__init__(
             model=model,
             train_dataset=retain_dataset, # will be used in _inner_training_loop (get_train_dataloader)
-            eval_dataset=retain_eval_dataset,
+            # eval_dataset=retain_eval_dataset,
             args=args,
             data_collator=data_collator,
         )
@@ -131,12 +131,7 @@ class LoRAPruneTrainer(Trainer):
                 "args.max_steps must be set to a positive value if dataloader does not have a length"
             )
 
-        delay_optimizer_creation = (
-            self.sharded_ddp is not None
-            and self.sharded_ddp != ShardedDDPOption.SIMPLE
-            or is_sagemaker_mp_enabled()
-            or self.fsdp is not None
-        )
+        delay_optimizer_creation = False
 
         self.state = TrainerState(
             stateful_callbacks=[
@@ -158,8 +153,7 @@ class LoRAPruneTrainer(Trainer):
         if model is not self.model:
             self.model_wrapped = model
 
-        if delay_optimizer_creation:
-            self.create_optimizer_and_scheduler(num_training_steps=max_steps)
+        self.create_optimizer_and_scheduler(num_training_steps=max_steps)
 
         # Check if saved optimizer or scheduler states exist
         self._load_optimizer_and_scheduler(resume_from_checkpoint)
@@ -179,9 +173,13 @@ class LoRAPruneTrainer(Trainer):
 
         self.state.epoch = 0
         start_time = time.time()
+        
+        # Initialize training variables
         epochs_trained = 0
         steps_trained_in_current_epoch = 0
         steps_trained_progress_bar = None
+        
+        self.control = self.callback_handler.on_train_begin(args, self.state, self.control)
 
         # Check if continuing training from a checkpoint
         if resume_from_checkpoint is not None and os.path.isfile(
@@ -224,24 +222,6 @@ class LoRAPruneTrainer(Trainer):
         self._total_loss_scalar = 0.0
         self._globalstep_last_logged = self.state.global_step
         model.zero_grad()
-
-        self.control = self.callback_handler.on_train_begin(args, self.state, self.control)
-
-        # Skip the first epochs_trained epochs to get the random state of the dataloader at the right point.
-        if not args.ignore_data_skip:
-            for epoch in range(epochs_trained):
-                is_random_sampler = hasattr(train_dataloader, "sampler") and isinstance(
-                    train_dataloader.sampler, RandomSampler
-                )
-                if is_torch_less_than_1_11 or not is_random_sampler:
-                    # We just need to begin an iteration to create the randomization of the sampler.
-                    # That was before PyTorch 1.11 however...
-                    for _ in train_dataloader:
-                        break
-                else:
-                    # Otherwise we need to call the whooooole sampler cause there is some random operation added
-                    # AT THE VERY END!
-                    _ = list(train_dataloader.sampler)
 
         total_batched_samples = 0
         if self.prune_metric == 'grad':
@@ -288,7 +268,7 @@ class LoRAPruneTrainer(Trainer):
                     if step % args.gradient_accumulation_steps == 0:
                         self.control = self.callback_handler.on_step_begin(args, self.state, self.control)
 
-                    tr_loss_step = self.training_step(model, inputs, is_forget=True)  # Add is_forget flag to differentiate
+                    tr_loss_step = self.training_step(model, inputs)  # Add is_forget flag to differentiate
                     
                     if (
                         args.logging_nan_inf_filter

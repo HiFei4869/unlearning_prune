@@ -8,7 +8,7 @@ import transformers
 from datasets import load_dataset
 from loraprune.trainer_ul import LoRAPruneTrainer  # Changed to use unlearning version
 from loraprune.utils_ul import freeze  # Changed to use unlearning version
-from loraprune.lora_ul import LoraConfig  # Changed to use unlearning version
+from loraprune.lora import LoraConfig  # Changed to use unlearning version
 
 from peft import (
     prepare_model_for_kbit_training,
@@ -196,7 +196,7 @@ def train(
         
         if val_set_size > 0 and split == "train":
             train_val = data["train"].train_test_split(
-                test_size=val_set_size, shuffle=True, seed=42
+                test_size=0.2, shuffle=True, seed=42
             )
             processed_data = train_val["train"]
             if max_samples:
@@ -204,7 +204,7 @@ def train(
             return processed_data.map(generate_and_tokenize_prompt)
         elif val_set_size > 0 and split == "val":
             train_val = data["train"].train_test_split(
-                test_size=val_set_size, shuffle=True, seed=42
+                test_size=0.2, shuffle=True, seed=42
             )
             processed_data = train_val["test"]
             if max_samples:
@@ -279,6 +279,14 @@ def train(
     model.save_pretrained(output_dir)
 
     print("\nTraining completed successfully!")
+    
+def generate_prompt(data_point):
+    return f"""Below is an instruction that describes a task. Write a response that appropriately completes the request.
 
+### Instruction:
+{data_point["instruction"]}
+
+### Response:
+{data_point["response"]}"""
 if __name__ == "__main__":
     fire.Fire(train)

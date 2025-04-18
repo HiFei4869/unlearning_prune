@@ -18,7 +18,7 @@ such as the portion of forget set (e.g. forget01, forget05, retain99, retain05),
 
 ## Evaluation on TOFU
 
-Follow the instructions on https://github.com/locuslab/open-unlearning to build the environment and prepare the data. 
+Clone the repo https://github.com/locuslab/open-unlearning and rename it as `tofu`. Follow the instructions on https://github.com/locuslab/open-unlearning to build the environment and prepare the data.
 
 Use the following script to run the evalution:
 

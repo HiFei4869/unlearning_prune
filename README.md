@@ -18,14 +18,20 @@ such as the portion of forget set (e.g. forget01, forget05, retain99, retain05),
 
 ## Evaluation on TOFU
 
-Clone the repo https://github.com/locuslab/open-unlearning and rename it as `tofu`. Follow the instructions on https://github.com/locuslab/open-unlearning to build the environment and prepare the data.
+Clone the repo https://github.com/locuslab/open-unlearning and rename it as `tofu`. 
+The folder structure should be like:
+
+    |____unlearning_prune/
+    |____tofu/
+
+Follow the instructions on https://github.com/locuslab/open-unlearning to build the environment and prepare the data.
 
 Use the following script to run the evalution:
 
     python src/eval.py --config-name=eval.yaml \
       experiment=eval/tofu/default \
       model=Llama-2-7b-chat-hf \
-      model.model_args.pretrained_model_name_or_path='/root/autodl-tmp/loraprune/${merged_output_model}' \
+      model.model_args.pretrained_model_name_or_path='/root/autodl-tmp/unlearning_prune/${merged_output_model}' \
       task_name=SAMPLE_EVAL \
       retain_logs_path='/root/autodl-tmp/tofu/saves/eval/tofu_Llama-2-7b-chat-hf_retain${portion_of_retain}/TOFU_EVAL.json'
 
